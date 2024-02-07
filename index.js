@@ -1,6 +1,14 @@
 import axios from 'axios';
 import { Command } from 'commander';
 import random from 'random';
+import winston from 'winston';
+const { combine, timestamp, cli, json } = winston.format;
+
+const logger = winston.createLogger({
+    level: 'debug',
+    format: combine(timestamp(), json()),
+    transports: [new winston.transports.Console({format: cli()}), new winston.transports.File({filename: 'medusa.log', level: 'error'})],
+});
 
 const program = new Command();
 const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper"
@@ -18,12 +26,35 @@ program
 
 const options = program.opts();
 
+logger.info("Starting with options:", options)
 console.table(options)
+
 const headers = { 'apikey': options.apiKey };
 const cluster = options.clusterUrl;
 
 async function sleep(ms) {
     await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function safePost(url, body) {
+    let resp;
+
+    try {
+        resp = await axios.post(url, body, { headers, timeout: 30000 });
+        resp.ok = true;
+    } catch (error) {
+        if (error.response) {
+            logger.error(`safePost() SERVER ERROR ${error.response.status}`, { 'response': error.response, 'url': url, 'body': body })
+            if (error.response.data) { logger.error(JSON.stringify(error.response.data)); }
+            resp = error.response;
+            resp.ok = false;
+        } else {
+            logger.error('safePost() CONNECT ERROR', { 'error': error, 'url': url, 'body': body  })
+            resp = { 'ok': false, 'error': error }
+        }
+    }
+
+    return resp;
 }
 
 var failedRequestsInARow = 0;
@@ -32,33 +63,24 @@ async function submitGeneration(submitDict) {
     let submitRetry = 0;
 
     while (submitRetry < MAX_SUBMIT_RETRIES) {
-        let submitReq;
-
-        try {
-            submitReq = await axios.post(`${cluster}/api/v2/generate/text/submit`, submitDict, { headers, timeout: 30000 });
-        } catch (error) {
-            if (error.response) {
-                console.error('submitGeneration() SERVER ERROR', error.response.status, JSON.stringify(error.response.data))
-                break;
-            } else {
-                console.error('submitGeneration() CONNECT ERROR', JSON.stringify(error))
-                await sleep(10000);
-                submitRetry++;
-                continue;
-            }
+        let submitReq = await safePost(`${cluster}/api/v2/generate/text/submit`, submitDict);
+        if (!submitReq.ok) {
+            await sleep(10000);
+            submitRetry++;
+            continue;
         }
 
         let reward;
         try {
             reward = submitReq.data.reward;
         } catch (error) {
-            console.error('submitGeneration() PARSE ERROR', JSON.stringify(error), JSON.stringify(submitReq.data));
+            logger.error('submitGeneration() PARSE ERROR', JSON.stringify(error), JSON.stringify(submitReq.data));
             await sleep(10000);
             submitRetry++;
             continue;
         }
         
-        console.info(`Submitted ${submitDict.id} and contributed for ${reward.toFixed(2)}`);
+        logger.info(`Submitted ${submitDict.id} and contributed for ${reward.toFixed(2)}`);
         failedRequestsInARow = 0;
         break;
     }
@@ -73,45 +95,30 @@ async function validateServer() {
         return lastStatus;
     }
     lastRetrieved = Date.now();
-    console.debug("Retrieving settings from API Server...");
+    logger.debug("Retrieving settings from API Server...");
 
     try {
         const req = await axios.get(`${kaiUrl}/health`);
         if (req.status === 200) {
             lastStatus = true;
         } else {
-            console.error(`Health check failed with status {req.status}`);
+            logger.error(`Health check failed with status ${req.status}`);
         }
     } catch (error) {
         if (error.response && error.response.status === 404) {
-            console.error(`Server ${kaiUrl} is up but does not appear to be a VLLM server.`);
+            logger.error(`Server ${kaiUrl} is up but does not appear to be a VLLM server.`);
         } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-            console.error(`Server ${kaiUrl} is not reachable. Are you sure it's running?`);
+            logger.error(`Server ${kaiUrl} is not reachable. Are you sure it's running?`);
         } else {
-            console.error(error);
+            logger.error(error);
         }
         lastStatus = false;
     }
     return lastStatus;
 }
 
-async function completionServer(request) {
-    const kaiUrl = options.serverUrl;
-
-    try {
-        const req = await axios.post(`${kaiUrl}/generate`, request);
-        return req.data.text[0];
-    } catch (error) {
-        if (error.response && error.response.status === 404) {
-            console.error(`Server ${kaiUrl} is up but does not appear to be a VLLM server.`);
-        } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-            console.error(`Server ${kaiUrl} is not reachable. Are you sure it's running?`);
-        } else {
-            console.error(error);
-        }
-    }
-    return false;
-}
+const MAX_POP_RETRIES = 3;
+const MAX_GENERATION_RETRIES = 5;
 
 async function textGenerationJob() {
     let currentId = null;
@@ -135,54 +142,46 @@ async function textGenerationJob() {
         softprompts: [],
         bridge_agent: BRIDGE_AGENT
     };
-    // console.log(genDict);    
+    // logger.log(genDict);    
 
     // Pop a generation
     let loopRetry = 0;    
-    const retries = 3;
-    while (loopRetry < retries) {
-        let popReq;
-        try {
-            popReq = await axios.post(`${cluster}/api/v2/generate/text/pop`, genDict, { timeout: 40000, headers: headers });
-        } catch (error) {
-            if (error.response) {
-                console.error('textGenerationJob() SERVER ERROR', error.response.status, JSON.stringify(error.response.data))
-                await sleep(interval);
-                return false; // HARD FAIL
-            } else {
-                console.error('textGenerationJob() CONNECT ERROR', JSON.stringify(error))
-                await sleep(interval);
-                loopRetry++;
-                continue;
-            }
+    while (loopRetry < MAX_POP_RETRIES) {
+        let popReq = await safePost(`${cluster}/api/v2/generate/text/pop`, genDict);
+
+        if (!popReq.ok) {
+            await sleep(interval);
+            loopRetry++;
+            continue;
         }
 
         try {
             currentId = popReq.data.id;
             currentPayload = popReq.data.payload;
         } catch (error) {
-            console.error('textGenerationJob() PARSE ERROR', JSON.stringify(error), JSON.stringify(popReq.data));
+            logger.error('textGenerationJob() PARSE ERROR', { 'error': error, 'data': popReq.data });
             await sleep(interval);
             loopRetry++;
             continue;
         }
 
         if (!currentId) {
-            console.debug(`Server ${cluster} has no valid generations to do for us. Skipped Info: ${popReq.data.skipped}.`);
+            logger.debug(`Server ${cluster} has no valid generations to do for us. Skipped Info: ${popReq.data.skipped}.`);
             await sleep(interval);
             continue;
         }
 
-        if ('width' in currentPayload || 'length' in currentPayload || 'steps' in currentPayload) {
-            console.warning(`Stable Horde payload detected: ${currentPayload}. Aborting.`);
+        if (currentPayload.width || currentPayload.length || currentPayload.steps) {
+            logger.error(`Stable Horde payload detected: ${currentPayload}. Aborting.`, currentPayload);
             currentId = null;
+            currentPayload = null;
             continue;
         }
 
         if (!currentPayload.max_length) { currentPayload.max_length = 80; }
         if (!currentPayload.max_context_length) { currentPayload.max_context_length = 1024; }
 
-        console.info(`New job received from ${cluster} for ${currentPayload.max_length} tokens and ${currentPayload.max_context_length} max context.`);
+        logger.info(`New job received from ${cluster} for ${currentPayload.max_length} tokens and ${currentPayload.max_context_length} max context.`);
         break;
     }
 
@@ -205,18 +204,32 @@ async function textGenerationJob() {
 
     // Generate with retry
     loopRetry = 0;
-    while (loopRetry < retries) {
-        const gen_req = await completionServer(vllm_request);
-
-        if (gen_req === false) {
-            console.error('Generation problem, will try again...')
-            loopRetry++;
+    while (loopRetry < MAX_GENERATION_RETRIES) {
+        const req = await safePost(`${options.serverUrl}/generate`, vllm_request);
+        if (!req.ok) {
+            logger.error('Generation problem, will try again...')
             await sleep(interval);
+            loopRetry++;            
             continue;
         }
 
+        let generation;
+        try {
+            generation = req.data.text[0];
+        } catch (error) {
+            logger.error('Generation PARSE ERROR', { 'error': error, 'data': popReq.data });
+            await sleep(interval);
+            loopRetry++;
+            continue;
+        }
+
+        // Remove prompt
+        if (generation.length > vllm_request.prompt.length) {
+            generation = generation.slice(vllm_request.prompt.length);
+        }
+
         // Generate OK - submit it.
-        submitGeneration({"id": currentId, "generation": gen_req});
+        submitGeneration({"id": currentId, "generation": generation});
         currentId = null;
         break;
     }
@@ -229,17 +242,7 @@ async function textGenerationJob() {
             "generation": "faulted",
             "seed": -1,
         }
-        
-        try {
-            const failure_req = await axios.post(`${cluster}/api/v2/generate/text/submit`, fail_dict, { timeout: 40000, headers: headers });
-        } catch (error) {
-            if (error.response) {
-                console.error('textGenerationJob() FAIL SERVER ERROR', error.response.status, JSON.stringify(error.response.data))
-            } else {
-                console.error('textGenerationJob() FAIL CONNECT ERROR', JSON.stringify(error))
-            }
-        }
-
+        await safePost(`${cluster}/api/v2/generate/text/submit`, fail_dict);
         return false;
     }
 
@@ -247,22 +250,24 @@ async function textGenerationJob() {
     return true;
 }
 
-// console.log(await validateServer());
-// console.log(await completionServer({'prompt': 'What is the capital of France?'}))
+// logger.info(await validateServer());
+// logger.info(await completionServer({'prompt': 'What is the capital of France?'}))
+
 let running = true;
 process.on('SIGINT', async function() {
-    console.log("Caught interrupt signal");
+    logger.error("Caught interrupt signal - shutting down");
     running = false;
 });
 process.on('uncaughtException', function(err) { 
-    console.log("Caught unexpected exception", err);
+    logger.error("Caught unexpected exception - shutting down", err);
     running = false;
 }) 
 process.on('uncaughtRejection', function(err) { 
-    console.log("Caught unexpected rejection", err);
+    logger.error("Caught unexpected rejection - shutting down", err);
     running = false;
 }) 
 
+const MAX_FAILED_REQUESTS = 6;
 async function runThread(t) { 
     let startTime = Date.now(); // Record the start time
     while (running) {
@@ -270,30 +275,34 @@ async function runThread(t) {
         try {
             res = await textGenerationJob();
         } catch(error) {
-            console.error('Thread',t,'FAILED: ', JSON.stringify(error));
+            logger.error(`Thread ${t} FAILED`, error);
             res = null;
         }
 
         let endTime = Date.now(); // Record the end time
         let runtime = endTime - startTime;
-        console.log("Thread",t,"iteration time", runtime, "ms", "result", res);
+        logger.info(`Thread ${t} iteration time ${runtime} ms result ${res}`);
         startTime = endTime; // Update the start time for the next iteration
 
         if (res !== true) {
             failedRequestsInARow++;
-            if (failedRequestsInARow == 3) {
-                console.error('Failed too many requests in a row, aborting bridge...');
+            if (failedRequestsInARow >= MAX_FAILED_REQUESTS) {
+                logger.crit('Failed too many requests in a row, aborting bridge...');
                 running = false;
             }
         }
     }
-    console.log('Thread',t,'shutting down.')
+    logger.info(`Thread ${t} shutting down.`)
 }
 
 const THREADS = parseInt(options.threads);
-console.log(`Spawning ${THREADS} worker threads.`)
+logger.info(`Spawning ${THREADS} worker threads.`)
+let threads = []
 for (let t=0; t<THREADS; t++) {
-    runThread(t);
+    threads.push(runThread(t));
 }
+logger.info('Press <Ctrl+C> to exit ...')
+await Promise.all(threads);
+logger.info('Done.')
 
-console.log('Press <Ctrl+C> to exit ...')
+// await validateServer();

@@ -118,7 +118,7 @@ async function validateServer() {
 }
 
 const MAX_POP_RETRIES = 3;
-const MAX_GENERATION_RETRIES = 5;
+const MAX_GENERATION_RETRIES = 3;
 
 async function textGenerationJob() {
     let currentId = null;
@@ -191,7 +191,6 @@ async function textGenerationJob() {
     }
 
     // Convert to VLLM parameters
-    if (currentPayload.top_k == 0) { currentPayload.top_k = -1; }
     const vllm_request = {
         'prompt': currentPayload.prompt,
         'stop': currentPayload.stop_sequence ?? [],
@@ -201,6 +200,11 @@ async function textGenerationJob() {
         'top_p': currentPayload.top_p ?? 1.0,
         'repetition_penalty': currentPayload.rep_pen ?? 1.0
     }
+    // top_k cannot be 0
+    if (vllm_request.top_k == 0) { vllm_request.top_k = -1; }
+    // repetition_penalty must be in range (0,2]
+    if (vllm_request.repetition_penalty > 2) { vllm_request.repetition_penalty = 2.0; }
+    if (vllm_request.repetition_penalty < 0.01) { vllm_request.repetition_penalty = 0.01; }
 
     // Generate with retry
     loopRetry = 0;
@@ -211,6 +215,8 @@ async function textGenerationJob() {
             await sleep(interval);
             loopRetry++;            
             continue;
+        } else {
+            logger.debug(`Generation ${currentId} completed with ${loopRetry} retries.`)
         }
 
         let generation;
@@ -236,6 +242,7 @@ async function textGenerationJob() {
 
     // Handle generate failure
     if (currentId !== null) {
+        logger.error(`Generation ${currentId} failed after ${loopRetry} retries.`)
         const fail_dict = {
             "id": currentId,
             "state": "faulted",
@@ -287,7 +294,7 @@ async function runThread(t) {
         if (res !== true) {
             failedRequestsInARow++;
             if (failedRequestsInARow >= MAX_FAILED_REQUESTS) {
-                logger.crit('Failed too many requests in a row, aborting bridge...');
+                logger.error('Failed too many requests in a row, aborting bridge...');
                 running = false;
             }
         }
@@ -303,6 +310,6 @@ for (let t=0; t<THREADS; t++) {
 }
 logger.info('Press <Ctrl+C> to exit ...')
 await Promise.all(threads);
-logger.info('Done.')
+logger.info('Worker threads have all exited.')
 
 // await validateServer();

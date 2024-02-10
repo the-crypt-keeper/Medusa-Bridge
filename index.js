@@ -1,3 +1,4 @@
+import fs from 'fs';
 import axios from 'axios';
 import { Command } from 'commander';
 import random from 'random';
@@ -26,6 +27,25 @@ program
     .option('-p, --priority-usernames <usernames>', 'Set priority usernames, comma-separated', (value) => value.split(','), [])
     .parse(process.argv);
 
+const options = program.opts();
+
+// Load configuration from file if --config-file is provided
+if (options.configFile) {
+    const configFile = options.configFile;
+    try {
+        const configOptions = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+        Object.keys(configOptions).forEach(key => {
+            if (program.getOptionValueSource(key) === 'default') {
+                program.setOptionValueWithSource(key, configOptions[key], 'config');
+            }
+        });
+    } catch (error) {
+        logger.error(`Error loading config file: ${error.message}`);
+        process.exit(1);
+    }
+}
+
+// Re-assign options after loading config file
 const options = program.opts();
 
 logger.info("Starting with options:", options)

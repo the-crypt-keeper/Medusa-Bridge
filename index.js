@@ -35,8 +35,9 @@ if (options.configFile) {
     try {
         const configOptions = JSON.parse(fs.readFileSync(configFile, 'utf8'));
         Object.keys(configOptions).forEach(key => {
-            if (program.getOptionValueSource(key) === 'default') {
-                program.setOptionValueWithSource(key, configOptions[key], 'config');
+            const option = program.options.find(o => o.long === `--${key}`);
+            if (option && option.getOptionValueSource() === 'default') {
+                option.setOptionValueWithSource(configOptions[key], 'config');
             }
         });
     } catch (error) {
@@ -45,8 +46,6 @@ if (options.configFile) {
     }
 }
 
-// Re-assign options after loading config file
-const options = program.opts();
 
 logger.info("Starting with options:", options)
 console.table(options)

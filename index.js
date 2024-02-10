@@ -14,13 +14,15 @@ const program = new Command();
 const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper"
 
 program
+    .option('-f, --config-file <file>', 'Load config from .json file')
     .option('-c, --cluster-url <url>', 'Set the Horde cluster URL', 'https://stablehorde.net')
     .option('-w, --worker-name <name>', 'Set the Horde worker name', `Automated Instance #${random.int(0, 100000000)}`)
     .option('-a, --api-key <key>', 'Set the Horde API key', '0000000000')
     .option('-s, --server-url <url>', 'Set the REST Server URL', 'http://localhost:8000')
-    .requiredOption('-m, --model <model>', 'Set the model name')
-    .requiredOption('-x, --ctx <ctx>', 'Set the context length')
-    .option('-t, --threads <threads>', 'Number of parallel threads', '2')
+    .option('-t, --server-type <type>', 'Set the REST Server type', 'vllm')
+    .option('-m, --model <model>', 'Set the model name')
+    .option('-x, --ctx <ctx>', 'Set the context length')
+    .option('-t, --threads <threads>', 'Number of parallel threads', '1')
     .option('-p, --priority-usernames <usernames>', 'Set priority usernames, comma-separated', (value) => value.split(','), [])
     .parse(process.argv);
 
@@ -87,10 +89,12 @@ async function submitGeneration(submitDict) {
 
 }
 
+// let healthUrl = `${options.serverUrl}/health`;
+let kaiUrl = options.serverUrl;
+let healthUrl = `${options.serverUrl}/api/extra/version`;
 var lastRetrieved = null;
 var lastStatus = null;
-async function validateServer() {
-    const kaiUrl = options.serverUrl;
+async function validateServer() {    
     if (lastStatus != null && (Date.now() - lastRetrieved) <= 30000) {
         return lastStatus;
     }
@@ -98,7 +102,7 @@ async function validateServer() {
     logger.debug("Retrieving settings from API Server...");
 
     try {
-        const req = await axios.get(`${kaiUrl}/health`);
+        const req = await axios.get(healthUrl);
         if (req.status === 200) {
             lastStatus = true;
         } else {
@@ -135,7 +139,7 @@ async function textGenerationJob() {
     // Generate pop request
     const genDict = {
         name: options.workerName,
-        models: ['vllm/'+options.model],
+        models: [options.model],
         max_length: parseInt(options.ctx)/2,
         max_context_length: parseInt(options.ctx),
         priority_usernames: options.priorityUsernames,
@@ -190,8 +194,12 @@ async function textGenerationJob() {
         return false;
     }
 
+    // Select runtime
+    const runtime = 'kobold';
+
     // Convert to VLLM parameters
-    const vllm_request = {
+    let generateUrl = `${options.serverUrl}/generate`;
+    let vllm_request = {
         'prompt': currentPayload.prompt,
         'stop': currentPayload.stop_sequence ?? [],
         'max_tokens': currentPayload.max_length,
@@ -206,10 +214,29 @@ async function textGenerationJob() {
     if (vllm_request.repetition_penalty > 2) { vllm_request.repetition_penalty = 2.0; }
     if (vllm_request.repetition_penalty < 0.01) { vllm_request.repetition_penalty = 0.01; }
 
+    // sglang flavor of vLLM?
+    if (runtime == 'sglang') {
+        delete vllm_request.prompt
+        vllm_request.max_new_tokens = vllm_request.max_tokens
+        delete vllm_request.max_tokens
+        // repetition_penalty not supported by sglang
+        delete vllm_request.repetition_penalty
+
+        vllm_request = {
+            'text': currentPayload.prompt,
+            'sampling_params': vllm_request
+        }
+    }
+    
+    if (runtime == 'kobold') {
+        generateUrl = `${options.serverUrl}/api/v1/generate`;
+        vllm_request = currentPayload;
+    }
+
     // Generate with retry
     loopRetry = 0;
     while (loopRetry < MAX_GENERATION_RETRIES) {
-        const req = await safePost(`${options.serverUrl}/generate`, vllm_request);
+        const req = await safePost(generateUrl, vllm_request);
         if (!req.ok) {
             logger.error('Generation problem, will try again...')
             await sleep(interval);
@@ -221,7 +248,9 @@ async function textGenerationJob() {
 
         let generation;
         try {
-            generation = req.data.text[0];
+            if (req.data.results) { req.data = req.data.results[0]; }
+            generation = req.data.text;
+            if (Array.isArray(generation)) { generation = generation[0]; }
         } catch (error) {
             logger.error('Generation PARSE ERROR', { 'error': error, 'data': popReq.data });
             await sleep(interval);
@@ -229,8 +258,8 @@ async function textGenerationJob() {
             continue;
         }
 
-        // Remove prompt
-        if (generation.length > vllm_request.prompt.length) {
+        // Remove prompt from vllm responces
+        if (runtime == 'vllm') {
             generation = generation.slice(vllm_request.prompt.length);
         }
 

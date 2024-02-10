@@ -3,6 +3,7 @@ import axios from 'axios';
 import { Command } from 'commander';
 import random from 'random';
 import winston from 'winston';
+import servers from './servers.js';
 const { combine, timestamp, cli, json } = winston.format;
 
 const logger = winston.createLogger({
@@ -16,15 +17,18 @@ const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper"
 
 program
     .option('-f, --config-file <file>', 'Load config from .json file')
+    
     .option('-c, --cluster-url <url>', 'Set the Horde cluster URL', 'https://stablehorde.net')
     .option('-w, --worker-name <name>', 'Set the Horde worker name', `Automated Instance #${random.int(0, 100000000)}`)
     .option('-a, --api-key <key>', 'Set the Horde API key', '0000000000')
-    .option('-s, --server-url <url>', 'Set the REST Server URL', 'http://localhost:8000')
-    .option('-t, --server-type <type>', 'Set the REST Server type', 'vllm')
-    .option('-m, --model <model>', 'Set the model name')
-    .option('-x, --ctx <ctx>', 'Set the context length')
-    .option('-t, --threads <threads>', 'Number of parallel threads', '1')
     .option('-p, --priority-usernames <usernames>', 'Set priority usernames, comma-separated', (value) => value.split(','), [])
+
+    .option('-s, --server-url <url>', 'Set the REST Server URL', 'http://localhost:8000')
+    .option('-e, --server-engine <engine>', 'Set the REST Server API type', null)
+    .option('-m, --model <model>', 'Set the model name', null)
+    .option('-x, --ctx <ctx>', 'Set the context length', null)
+    .option('-l, --max-length <length>', 'Set the max generation length', '512')    
+    .option('-t, --threads <threads>', 'Number of parallel threads', '1')
     .parse(process.argv);
 
 const options = program.opts();
@@ -35,9 +39,12 @@ if (options.configFile) {
     try {
         const configOptions = JSON.parse(fs.readFileSync(configFile, 'utf8'));
         Object.keys(configOptions).forEach(key => {
-            const option = program.options.find(o => o.long === `--${key}`);
-            if (option && option.getOptionValueSource() === 'default') {
-                option.setOptionValueWithSource(configOptions[key], 'config');
+            if (!options.hasOwnProperty(key)) {
+                logger.error('Unknown config key '+key);
+                process.exit(1);
+            }          
+            if (program.getOptionValueSource(key) === 'default') {
+                program.setOptionValueWithSource(key, configOptions[key], 'config');
             }
         });
     } catch (error) {
@@ -46,10 +53,14 @@ if (options.configFile) {
     }
 }
 
-
 logger.info("Starting with options:", options)
 console.table(options)
 
+if (!options.model) { logger.error('--model is required'); process.exit(1); }
+if (!options.ctx) { logger.error('--ctx is required'); process.exit(1); }
+if (!options.serverEngine) { logger.error('--server-engine is required'); process.exit(1); }
+
+const server = servers[options.serverEngine];
 const headers = { 'apikey': options.apiKey };
 const cluster = options.clusterUrl;
 
@@ -108,12 +119,11 @@ async function submitGeneration(submitDict) {
 
 }
 
-// let healthUrl = `${options.serverUrl}/health`;
-let kaiUrl = options.serverUrl;
-let healthUrl = `${options.serverUrl}/api/extra/version`;
+// let healthUrl = ;
 var lastRetrieved = null;
 var lastStatus = null;
-async function validateServer() {    
+async function validateServer() {
+    const healthUrl = `${options.serverUrl}/${server.healthUrl}`;
     if (lastStatus != null && (Date.now() - lastRetrieved) <= 30000) {
         return lastStatus;
     }
@@ -129,9 +139,9 @@ async function validateServer() {
         }
     } catch (error) {
         if (error.response && error.response.status === 404) {
-            logger.error(`Server ${kaiUrl} is up but does not appear to be a VLLM server.`);
+            logger.error(`Server ${options.serverUrl} is up but does not appear to be a VLLM server.`);
         } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-            logger.error(`Server ${kaiUrl} is not reachable. Are you sure it's running?`);
+            logger.error(`Server ${options.serverUrl} is not reachable. Are you sure it's running?`);
         } else {
             logger.error(error);
         }
@@ -159,9 +169,10 @@ async function textGenerationJob() {
     const genDict = {
         name: options.workerName,
         models: [options.model],
-        max_length: parseInt(options.ctx)/2,
+        max_length: parseInt(options.maxLength),
         max_context_length: parseInt(options.ctx),
         priority_usernames: options.priorityUsernames,
+        threads: parseInt(options.threads),
         softprompts: [],
         bridge_agent: BRIDGE_AGENT
     };
@@ -213,49 +224,14 @@ async function textGenerationJob() {
         return false;
     }
 
-    // Select runtime
-    const runtime = 'kobold';
-
-    // Convert to VLLM parameters
-    let generateUrl = `${options.serverUrl}/generate`;
-    let vllm_request = {
-        'prompt': currentPayload.prompt,
-        'stop': currentPayload.stop_sequence ?? [],
-        'max_tokens': currentPayload.max_length,
-        'temperature': currentPayload.temperature ?? 1.0,
-        'top_k': currentPayload.top_k ?? -1,
-        'top_p': currentPayload.top_p ?? 1.0,
-        'repetition_penalty': currentPayload.rep_pen ?? 1.0
-    }
-    // top_k cannot be 0
-    if (vllm_request.top_k == 0) { vllm_request.top_k = -1; }
-    // repetition_penalty must be in range (0,2]
-    if (vllm_request.repetition_penalty > 2) { vllm_request.repetition_penalty = 2.0; }
-    if (vllm_request.repetition_penalty < 0.01) { vllm_request.repetition_penalty = 0.01; }
-
-    // sglang flavor of vLLM?
-    if (runtime == 'sglang') {
-        delete vllm_request.prompt
-        vllm_request.max_new_tokens = vllm_request.max_tokens
-        delete vllm_request.max_tokens
-        // repetition_penalty not supported by sglang
-        delete vllm_request.repetition_penalty
-
-        vllm_request = {
-            'text': currentPayload.prompt,
-            'sampling_params': vllm_request
-        }
-    }
-    
-    if (runtime == 'kobold') {
-        generateUrl = `${options.serverUrl}/api/v1/generate`;
-        vllm_request = currentPayload;
-    }
+    // Convert the request
+    const server_request = server.generatePayload(currentPayload);
+    const generateUrl = `${options.serverUrl}/${server.generateUrl}`;
 
     // Generate with retry
     loopRetry = 0;
     while (loopRetry < MAX_GENERATION_RETRIES) {
-        const req = await safePost(generateUrl, vllm_request);
+        const req = await safePost(generateUrl, server_request);
         if (!req.ok) {
             logger.error('Generation problem, will try again...')
             await sleep(interval);
@@ -267,19 +243,12 @@ async function textGenerationJob() {
 
         let generation;
         try {
-            if (req.data.results) { req.data = req.data.results[0]; }
-            generation = req.data.text;
-            if (Array.isArray(generation)) { generation = generation[0]; }
+            generation = server.extractGeneration(req.data, currentPayload.prompt);
         } catch (error) {
             logger.error('Generation PARSE ERROR', { 'error': error, 'data': popReq.data });
             await sleep(interval);
             loopRetry++;
             continue;
-        }
-
-        // Remove prompt from vllm responces
-        if (runtime == 'vllm') {
-            generation = generation.slice(vllm_request.prompt.length);
         }
 
         // Generate OK - submit it.
@@ -304,9 +273,6 @@ async function textGenerationJob() {
     // Done.
     return true;
 }
-
-// logger.info(await validateServer());
-// logger.info(await completionServer({'prompt': 'What is the capital of France?'}))
 
 let running = true;
 process.on('SIGINT', async function() {
@@ -350,6 +316,13 @@ async function runThread(t) {
     logger.info(`Thread ${t} shutting down.`)
 }
 
+logger.info('Checking server is up..')
+let status = await validateServer();
+if (!status) {
+    logger.error('Something seems to be wrong with '+options.serverUrl);
+    process.exit(1);
+}
+
 const THREADS = parseInt(options.threads);
 logger.info(`Spawning ${THREADS} worker threads.`)
 let threads = []
@@ -359,5 +332,3 @@ for (let t=0; t<THREADS; t++) {
 logger.info('Press <Ctrl+C> to exit ...')
 await Promise.all(threads);
 logger.info('Worker threads have all exited.')
-
-// await validateServer();

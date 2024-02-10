@@ -4,6 +4,11 @@ This software enables you to join multiple local LLM API servers to the [KoboldA
 
 It is the sucessor to [LlamaCpp-Horde-Bridge](https://github.com/the-crypt-keeper/LlamaCpp-Horde-Bridge), rewritten in NodeJS. If upgrading, note that the names of some configuration arguments have changed.
 
+Throughput-enhancing Features:
+
+* Multi-threaded processing: generate multiple jobs in parallel
+* Asyncronous job submission: pop a new job as soon as the previous one has finished generating, submit in the background
+
 Supported inference REST API servers:
 
 * [llama.cpp](https://github.com/ggerganov/llama.cpp) server

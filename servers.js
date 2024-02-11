@@ -70,7 +70,9 @@ servers.llamacpp = {
         let llamacpp_request = {
             'prompt': currentPayload.prompt,
             'stop': currentPayload.stop_sequence ?? [],
+            // 'n_ctx': currentPayload.max_context_length,
             'n_predict': currentPayload.max_length,
+            'n_keep': currentPayload.max_context_length-currentPayload.max_length,
             'temperature': currentPayload.temperature ?? 1.0,
             'tfs_z': currentPayload.tfs ?? 1.0,
             'top_k': currentPayload.top_k ?? -1,

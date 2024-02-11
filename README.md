@@ -119,3 +119,7 @@ TODO
 ## sglang
 
 TODO
+
+## aphrodite
+
+python3 -m aphrodite.endpoints.kobold.api_server --model TheBloke/OpenHermes-2.5-Mistral-7B-GPTQ --max-length 512 --max-model-len 8192

@@ -37,14 +37,17 @@ const options = program.opts();
 if (options.configFile) {
     const configFile = options.configFile;
     try {
-        const configOptions = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+        const configOptions = JSON.parse(fs.readFileSync(configFile, 'utf8'));        
         Object.keys(configOptions).forEach(key => {
             if (!options.hasOwnProperty(key)) {
                 logger.error('Unknown config key '+key);
                 process.exit(1);
             }          
             if (program.getOptionValueSource(key) === 'default') {
+                logger.info('Applied '+key+'='+configOptions[key]+' from config file')
                 program.setOptionValueWithSource(key, configOptions[key], 'config');
+            } else {
+                logger.warning('Skipped '+key)
             }
         });
     } catch (error) {
@@ -123,7 +126,7 @@ async function submitGeneration(submitDict) {
 var lastRetrieved = null;
 var lastStatus = null;
 async function validateServer() {
-    const healthUrl = `${options.serverUrl}/${server.healthUrl}`;
+    const healthUrl = `${options.serverUrl}${server.healthUrl}`;
     if (lastStatus != null && (Date.now() - lastRetrieved) <= 30000) {
         return lastStatus;
     }
@@ -226,7 +229,7 @@ async function textGenerationJob() {
 
     // Convert the request
     const server_request = server.generatePayload(currentPayload);
-    const generateUrl = `${options.serverUrl}/${server.generateUrl}`;
+    const generateUrl = `${options.serverUrl}${server.generateUrl}`;
 
     // Generate with retry
     loopRetry = 0;
@@ -252,6 +255,7 @@ async function textGenerationJob() {
         }
 
         // Generate OK - submit it.
+        //logger.debug(generation);
         submitGeneration({"id": currentId, "generation": generation});
         currentId = null;
         break;

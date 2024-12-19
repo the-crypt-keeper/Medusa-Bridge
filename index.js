@@ -13,7 +13,7 @@ const logger = winston.createLogger({
 });
 
 const program = new Command();
-const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper"
+const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper/Medusa-Bridge"
 
 program
     .option('-f, --config-file <file>', 'Load config from .json file')
@@ -27,8 +27,9 @@ program
     .option('-e, --server-engine <engine>', 'Set the REST Server API type', null)
     .option('-m, --model <model>', 'Set the model name', null)
     .option('-x, --ctx <ctx>', 'Set the context length', null)
-    .option('-l, --max-length <length>', 'Set the max generation length', '512')    
+    .option('-l, --max-length <length>', 'Set the max generation length', '512')
     .option('-t, --threads <threads>', 'Number of parallel threads', '1')
+    .option('--timeout <timeout>', 'How long to wait for generation to complete (sec)', '60')    
     .parse(process.argv);
 
 const options = program.opts();
@@ -75,7 +76,7 @@ async function safePost(url, body) {
     let resp;
 
     try {
-        resp = await axios.post(url, body, { headers, timeout: 30000 });
+        resp = await axios.post(url, body, { headers, timeout: 1000*parseInt(options.timeout) });
         resp.ok = true;
     } catch (error) {
         if (error.response) {
@@ -183,8 +184,9 @@ async function textGenerationJob() {
 
     // Pop a generation
     let loopRetry = 0;    
+    let popReq;
     while (loopRetry < MAX_POP_RETRIES) {
-        let popReq = await safePost(`${cluster}/api/v2/generate/text/pop`, genDict);
+        popReq = await safePost(`${cluster}/api/v2/generate/text/pop`, genDict);
 
         if (!popReq.ok) {
             await sleep(interval);
@@ -203,7 +205,7 @@ async function textGenerationJob() {
         }
 
         if (!currentId) {
-            logger.debug(`Server ${cluster} has no valid generations to do for us. Skipped Info: ${popReq.data.skipped}.`);
+            logger.debug(`Server ${cluster} has no pending generations.`);
             await sleep(interval);
             continue;
         }

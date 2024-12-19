@@ -27,6 +27,29 @@ servers.vllm = {
     }
 }
 
+servers.tabbyapi = {
+    'healthUrl': '/health',
+    'generateUrl': '/v1/completions',
+    'generatePayload': (currentPayload) => {
+        let vllm_request = {
+            'prompt': currentPayload.prompt,
+            'stop': currentPayload.stop_sequence ?? [],
+            'max_tokens': currentPayload.max_length,
+            'temperature': currentPayload.temperature ?? 1.0,
+            'top_k': currentPayload.top_k ?? -1,
+            'top_p': currentPayload.top_p ?? 1.0,
+            'repetition_penalty': currentPayload.rep_pen ?? 1.0
+        }
+        // repetition_penalty must be in range (0,2]
+        if (vllm_request.repetition_penalty > 2) { vllm_request.repetition_penalty = 2.0; }
+        if (vllm_request.repetition_penalty < 0.01) { vllm_request.repetition_penalty = 0.01; }
+        return vllm_request;
+    },
+    'extractGeneration': (data, prompt) => { 
+        return data.choices[0].text;
+    }
+}
+
 servers.sglang = {
     'healthUrl': '/health',
     'generateUrl': '/generate',

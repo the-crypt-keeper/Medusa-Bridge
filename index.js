@@ -14,6 +14,7 @@ const logger = winston.createLogger({
 
 const program = new Command();
 const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper/Medusa-Bridge"
+let running = true;
 
 program
     .option('-f, --config-file <file>', 'Load config from .json file')
@@ -207,6 +208,7 @@ async function textGenerationJob() {
         if (!currentId) {
             logger.debug(`Server ${cluster} has no pending generations.`);
             await sleep(interval);
+            if (!running) { break; }
             continue;
         }
 
@@ -265,7 +267,8 @@ async function textGenerationJob() {
 
     // Handle generate failure
     if (currentId !== null) {
-        logger.error(`Generation ${currentId} failed after ${loopRetry} retries.`)
+        logger.error(`Generation ${currentId} failed after ${loopRetry} retries:`)
+        logger.error(JSON.stringify(currentPayload))
         const fail_dict = {
             "id": currentId,
             "state": "faulted",
@@ -280,7 +283,6 @@ async function textGenerationJob() {
     return true;
 }
 
-let running = true;
 process.on('SIGINT', async function() {
     logger.error("Caught interrupt signal - shutting down");
     running = false;

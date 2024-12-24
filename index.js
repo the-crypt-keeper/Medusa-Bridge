@@ -26,7 +26,8 @@ program
 
     .option('-s, --server-url <url>', 'Set the REST Server URL', 'http://localhost:8000')
     .option('-e, --server-engine <engine>', 'Set the REST Server API type', null)
-    .option('-m, --model <model>', 'Set the model name', null)
+    .option('-sm, --server-model <server-model>', 'Set the model requested from API server', null)    
+    .option('-m, --model <model>', 'Set the model name offered to Horde', null)
     .option('-x, --ctx <ctx>', 'Set the context length', null)
     .option('-l, --max-length <length>', 'Set the max generation length', '512')
     .option('-t, --threads <threads>', 'Number of parallel threads', '1')
@@ -144,7 +145,7 @@ async function validateServer() {
         }
     } catch (error) {
         if (error.response && error.response.status === 404) {
-            logger.error(`Server ${options.serverUrl} is up but does not appear to be a VLLM server.`);
+            logger.error(`Server ${options.serverUrl} is up but the health check endpoint was not found.`);
         } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
             logger.error(`Server ${options.serverUrl} is not reachable. Are you sure it's running?`);
         } else {
@@ -232,7 +233,8 @@ async function textGenerationJob() {
     }
 
     // Convert the request
-    const server_request = server.generatePayload(currentPayload);
+    let server_request = server.generatePayload(currentPayload);
+    if (options.serverModel) { server_request.model = options.serverModel; }
     const generateUrl = `${options.serverUrl}${server.generateUrl}`;
 
     // Generate with retry

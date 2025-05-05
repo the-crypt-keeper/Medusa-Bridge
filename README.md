@@ -20,7 +20,7 @@ See below for example configurations for each engine.
 
 # Installation
 
-Medusa-Bridge requires NodeJS v16, installation via [nvm](https://github.com/nvm-sh/nvm) is recommended.
+Medusa-Bridge requires NodeJS v22, installation via [nvm](https://github.com/nvm-sh/nvm) is recommended.
 
 Execute `npm ci` to install dependencies
 

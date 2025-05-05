@@ -6,7 +6,7 @@ import servers from './servers.js';
 import { safePost, defaultLogger } from './utils.js';
 
 const program = new Command();
-const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper/Medusa-Bridge"
+const BRIDGE_AGENT = "Medusa Bridge:11:https://github.com/the-crypt-keeper/Medusa-Bridge"
 let running = true;
 
 program

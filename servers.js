@@ -32,15 +32,23 @@ servers.vllm = {
 servers.tabbyapi = {
     'healthUrl': '/health',
     'generateUrl': '/v1/completions',
-    'generatePayload': (currentPayload, serverUrl) => {
+    'generatePayload': async (currentPayload, serverUrl) => {
         // disable TFS
         currentPayload.tfs = 1.0;
         // encode the prompt
-        
+        prompt_tokens = await safePost(serverUrl+'/v1/token/encode', { 'text': currentPayload.prompt })
+        max_tokens = (currentPayload.max_context_length || 2048) - (currentPayload.max_length || 256)
+        if (prompt_tokens.ok && max_tokens > 0) {
+            if (prompt_tokens.length > max_tokens) {
+                console.log('Trimming request from', prompt_tokens.length, ' to ', max_tokens)
+                // TODO: keep only the first max_tokens/2 and last max_tokens of prompt_tokens.tokens
+            }
+            currentPayload.prompt = prompt_tokens.tokens
+        }
         // debug
-        let debugPayload = {...currentPayload}
-        debugPayload.prompt = null;
-        console.log(JSON.stringify(debugPayload));
+        // let debugPayload = {...currentPayload}
+        // debugPayload.prompt = null;
+        // console.log(JSON.stringify(debugPayload));
         return currentPayload;
     },
     'extractGeneration': (data, prompt) => { 

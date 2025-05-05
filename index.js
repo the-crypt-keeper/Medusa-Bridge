@@ -233,7 +233,7 @@ async function textGenerationJob() {
     }
 
     // Convert the request
-    let server_request = server.generatePayload(currentPayload);
+    let server_request = server.generatePayload(currentPayload, options.serverUrl);
     if (options.serverModel) { server_request.model = options.serverModel; }
     const generateUrl = `${options.serverUrl}${server.generateUrl}`;
 

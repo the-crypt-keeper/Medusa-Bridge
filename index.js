@@ -217,7 +217,7 @@ async function textGenerationJob() {
             const max_response_length = (currentPayload.max_length || 256);
             const max_prompt_tokens = max_context_length - max_response_length;
             
-            defaultLogger.debug(`Tokenized prompt: ${tokens.length} tokens, max allowed: ${max_prompt_tokens}`);
+            defaultLogger.debug(`CLE Tokenized prompt: ${tokens.length} tokens, max allowed: ${max_prompt_tokens}`);
             
             if (tokens.length > max_prompt_tokens) {
                 // Keep the first half and last half of the tokens
@@ -225,13 +225,13 @@ async function textGenerationJob() {
                 const firstHalf = tokens.slice(0, halfMaxTokens);
                 const secondHalf = tokens.slice(-halfMaxTokens);
                 const trimmedTokens = [...firstHalf, ...secondHalf];
-                
-                defaultLogger.info(`Trimmed prompt from ${tokens.length} to ${trimmedTokens.length} tokens`);
-                
+
                 const newPrompt = await server.detokenize(trimmedTokens, options.serverUrl);
                 if (newPrompt) {
-                    defaultLogger.info('Successfully applied context length enforcement');
+                    defaultLogger.info(`CLE Trimmed prompt from ${tokens.length} to ${trimmedTokens.length} tokens`);
                     server_request.prompt = newPrompt;
+                } else {
+                    defaultLogger.error('CLE failed.')
                 }
             }
         }

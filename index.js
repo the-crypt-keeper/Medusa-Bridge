@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import random from 'random';
 import winston from 'winston';
 import servers from './servers.js';
+import { safePost } from './utils.js';
 const { combine, timestamp, cli, json } = winston.format;
 
 const logger = winston.createLogger({
@@ -74,26 +75,6 @@ async function sleep(ms) {
     await new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function safePost(url, body) {
-    let resp;
-
-    try {
-        resp = await axios.post(url, body, { headers, timeout: 1000*parseInt(options.timeout) });
-        resp.ok = true;
-    } catch (error) {
-        if (error.response) {
-            logger.error(`safePost() SERVER ERROR ${error.response.status}`, { 'response': error.response, 'url': url, 'body': body })
-            if (error.response.data) { logger.error(JSON.stringify(error.response.data)); }
-            resp = error.response;
-            resp.ok = false;
-        } else {
-            logger.error('safePost() CONNECT ERROR', { 'error': error, 'url': url, 'body': body  })
-            resp = { 'ok': false, 'error': error }
-        }
-    }
-
-    return resp;
-}
 
 var failedRequestsInARow = 0;
 async function submitGeneration(submitDict) {
@@ -101,7 +82,7 @@ async function submitGeneration(submitDict) {
     let submitRetry = 0;
 
     while (submitRetry < MAX_SUBMIT_RETRIES) {
-        let submitReq = await safePost(`${cluster}/api/v2/generate/text/submit`, submitDict);
+        let submitReq = await safePost(`${cluster}/api/v2/generate/text/submit`, submitDict, headers, 1000*parseInt(options.timeout), logger);
         if (!submitReq.ok) {
             await sleep(10000);
             submitRetry++;
@@ -188,7 +169,7 @@ async function textGenerationJob() {
     let loopRetry = 0;    
     let popReq;
     while (loopRetry < MAX_POP_RETRIES) {
-        popReq = await safePost(`${cluster}/api/v2/generate/text/pop`, genDict);
+        popReq = await safePost(`${cluster}/api/v2/generate/text/pop`, genDict, headers, 1000*parseInt(options.timeout), logger);
 
         if (!popReq.ok) {
             await sleep(interval);
@@ -240,7 +221,7 @@ async function textGenerationJob() {
     // Generate with retry
     loopRetry = 0;
     while (loopRetry < MAX_GENERATION_RETRIES) {
-        const req = await safePost(generateUrl, server_request);
+        const req = await safePost(generateUrl, server_request, headers, 1000*parseInt(options.timeout), logger);
         if (!req.ok) {
             logger.error('Generation problem, will try again...')
             await sleep(interval);
@@ -277,7 +258,7 @@ async function textGenerationJob() {
             "generation": "faulted",
             "seed": -1,
         }
-        await safePost(`${cluster}/api/v2/generate/text/submit`, fail_dict);
+        await safePost(`${cluster}/api/v2/generate/text/submit`, fail_dict, headers, 1000*parseInt(options.timeout), logger);
         return false;
     }
 

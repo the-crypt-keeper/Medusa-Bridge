@@ -32,42 +32,25 @@ servers.vllm = {
 servers.tabbyapi = {
     'healthUrl': '/health',
     'generateUrl': '/v1/completions',
+    'tokenize': async (text, serverUrl) => {
+        let prompt_tokens = await safePost(serverUrl+'/v1/token/encode', { 'text': text });
+        if (!prompt_tokens.ok) {
+            defaultLogger.error('ERROR: Something went wrong encoding tokens.');
+            return null;
+        }
+        return prompt_tokens.data.tokens;
+    },
+    'detokenize': async (tokens, serverUrl) => {
+        let new_prompt = await safePost(serverUrl+'/v1/token/decode', { 'tokens': tokens });
+        if (!new_prompt.ok) {
+            defaultLogger.error('Failed to decode tokens.');
+            return null;
+        }
+        return new_prompt.data.text;
+    },
     'generatePayload': async (currentPayload, serverUrl) => {
         // disable TFS
         currentPayload.tfs = 1.0;
-        // encode the prompt
-        let prompt_tokens = await safePost(serverUrl+'/v1/token/encode', { 'text': currentPayload.prompt });
-        if (!prompt_tokens.ok) {
-            defaultLogger.error('ERROR: Something went wrong encoding tokens.')
-            return currentPayload;
-        }
-
-        prompt_tokens = prompt_tokens.data;
-        const max_context_length = (currentPayload.max_context_length || 2048);
-        const max_response_length = (currentPayload.max_length || 256);
-        const max_prompt_tokens = max_context_length - max_response_length;
-        console.log('max_context_length=',max_context_length,' max_response_length=',max_response_length,' max_prompt_tokens=',max_prompt_tokens, ' prompt_tokens=', prompt_tokens.length)
-        
-        if (prompt_tokens.length > max_prompt_tokens) {
-            // Keep the first half and last half of the tokens
-            const halfMaxTokens = Math.floor(max_prompt_tokens / 2);
-            const firstHalf = prompt_tokens.tokens.slice(0, halfMaxTokens);
-            const secondHalf = prompt_tokens.tokens.slice(-halfMaxTokens);
-            prompt_tokens.tokens = [...firstHalf, ...secondHalf];
-            console.log('Trimmed',prompt_tokens.length,'to', prompt_tokens.tokens.length, 'tokens');
-
-            let new_prompt = await safePost(serverUrl+'/v1/token/decode', { 'tokens': prompt_tokens.tokens });
-            if (!new_prompt.ok) {
-                defaultLogger.error('Failed to decode new prompt.')
-            } else {
-                currentPayload.prompt = new_prompt.data.text;
-                //console.log(currentPayload.prompt);
-            }
-        }
-        // debug
-        // let debugPayload = {...currentPayload}
-        // debugPayload.prompt = null;
-        //console.log(JSON.stringify(currentPayload));
         return currentPayload;
     },
     'extractGeneration': (data, prompt) => { 

@@ -208,6 +208,35 @@ async function textGenerationJob() {
     // Convert the request
     let server_request = await server.generatePayload(currentPayload, options.serverUrl);
     if (options.serverModel) { server_request.model = options.serverModel; }
+    
+    // Apply context length enforcement if tokenize and detokenize methods are available
+    if (server.tokenize && server.detokenize) {
+        const tokens = await server.tokenize(currentPayload.prompt, options.serverUrl);
+        if (tokens) {
+            const max_context_length = (currentPayload.max_context_length || 2048);
+            const max_response_length = (currentPayload.max_length || 256);
+            const max_prompt_tokens = max_context_length - max_response_length;
+            
+            defaultLogger.debug(`Tokenized prompt: ${tokens.length} tokens, max allowed: ${max_prompt_tokens}`);
+            
+            if (tokens.length > max_prompt_tokens) {
+                // Keep the first half and last half of the tokens
+                const halfMaxTokens = Math.floor(max_prompt_tokens / 2);
+                const firstHalf = tokens.slice(0, halfMaxTokens);
+                const secondHalf = tokens.slice(-halfMaxTokens);
+                const trimmedTokens = [...firstHalf, ...secondHalf];
+                
+                defaultLogger.info(`Trimmed prompt from ${tokens.length} to ${trimmedTokens.length} tokens`);
+                
+                const newPrompt = await server.detokenize(trimmedTokens, options.serverUrl);
+                if (newPrompt) {
+                    defaultLogger.info('Successfully applied context length enforcement');
+                    server_request.prompt = newPrompt;
+                }
+            }
+        }
+    }
+    
     const generateUrl = `${options.serverUrl}${server.generateUrl}`;
 
     // Generate with retry

@@ -30,9 +30,11 @@ servers.vllm = {
 servers.tabbyapi = {
     'healthUrl': '/health',
     'generateUrl': '/v1/completions',
-    'generatePayload': (currentPayload) => {
+    'generatePayload': (currentPayload, serverUrl) => {
         // disable TFS
         currentPayload.tfs = 1.0;
+        // encode the prompt
+        
         // debug
         let debugPayload = {...currentPayload}
         debugPayload.prompt = null;

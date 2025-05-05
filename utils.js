@@ -1,4 +1,12 @@
 import axios from 'axios';
+import winston from 'winston';
+const { combine, timestamp, cli, json } = winston.format;
+
+export const defaultLogger = winston.createLogger({
+    level: 'debug',
+    format: combine(timestamp(), json()),
+    transports: [new winston.transports.Console({format: cli()}), new winston.transports.File({filename: 'medusa.log', level: 'error'})],
+});
 
 /**
  * Makes a POST request with error handling
@@ -9,7 +17,7 @@ import axios from 'axios';
  * @param {object} logger - Winston logger instance
  * @returns {object} Response with ok flag
  */
-export async function safePost(url, body, headers, timeout, logger) {
+export async function safePost(url, body, headers = {}, timeout = 30000, logger = defaultLogger) {
     let resp;
 
     try {

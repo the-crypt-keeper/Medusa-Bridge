@@ -2,16 +2,8 @@ import fs from 'fs';
 import axios from 'axios';
 import { Command } from 'commander';
 import random from 'random';
-import winston from 'winston';
 import servers from './servers.js';
-import { safePost } from './utils.js';
-const { combine, timestamp, cli, json } = winston.format;
-
-const logger = winston.createLogger({
-    level: 'debug',
-    format: combine(timestamp(), json()),
-    transports: [new winston.transports.Console({format: cli()}), new winston.transports.File({filename: 'medusa.log', level: 'error'})],
-});
+import { safePost, defaultLogger } from './utils.js';
 
 const program = new Command();
 const BRIDGE_AGENT = "Medusa Bridge:10:https://github.com/the-crypt-keeper/Medusa-Bridge"
@@ -44,28 +36,28 @@ if (options.configFile) {
         const configOptions = JSON.parse(fs.readFileSync(configFile, 'utf8'));        
         Object.keys(configOptions).forEach(key => {
             if (!options.hasOwnProperty(key)) {
-                logger.error('Unknown config key '+key);
+                defaultLogger.error('Unknown config key '+key);
                 process.exit(1);
             }          
             if (program.getOptionValueSource(key) === 'default') {
-                logger.info('Applied '+key+'='+configOptions[key]+' from config file')
+                defaultLogger.info('Applied '+key+'='+configOptions[key]+' from config file')
                 program.setOptionValueWithSource(key, configOptions[key], 'config');
             } else {
-                logger.warning('Skipped '+key)
+                defaultLogger.warning('Skipped '+key)
             }
         });
     } catch (error) {
-        logger.error(`Error loading config file: ${error.message}`);
+        defaultLogger.error(`Error loading config file: ${error.message}`);
         process.exit(1);
     }
 }
 
-logger.info("Starting with options:", options)
+defaultLogger.info("Starting with options:", options)
 console.table(options)
 
-if (!options.model) { logger.error('--model is required'); process.exit(1); }
-if (!options.ctx) { logger.error('--ctx is required'); process.exit(1); }
-if (!options.serverEngine) { logger.error('--server-engine is required'); process.exit(1); }
+if (!options.model) { defaultLogger.error('--model is required'); process.exit(1); }
+if (!options.ctx) { defaultLogger.error('--ctx is required'); process.exit(1); }
+if (!options.serverEngine) { defaultLogger.error('--server-engine is required'); process.exit(1); }
 
 const server = servers[options.serverEngine];
 const headers = { 'apikey': options.apiKey };
@@ -82,7 +74,7 @@ async function submitGeneration(submitDict) {
     let submitRetry = 0;
 
     while (submitRetry < MAX_SUBMIT_RETRIES) {
-        let submitReq = await safePost(`${cluster}/api/v2/generate/text/submit`, submitDict, headers, 1000*parseInt(options.timeout), logger);
+        let submitReq = await safePost(`${cluster}/api/v2/generate/text/submit`, submitDict, headers, 1000*parseInt(options.timeout));
         if (!submitReq.ok) {
             await sleep(10000);
             submitRetry++;
@@ -93,13 +85,13 @@ async function submitGeneration(submitDict) {
         try {
             reward = submitReq.data.reward;
         } catch (error) {
-            logger.error('submitGeneration() PARSE ERROR', JSON.stringify(error), JSON.stringify(submitReq.data));
+            defaultLogger.error('submitGeneration() PARSE ERROR', JSON.stringify(error), JSON.stringify(submitReq.data));
             await sleep(10000);
             submitRetry++;
             continue;
         }
         
-        logger.info(`Submitted ${submitDict.id} and contributed for ${reward.toFixed(2)}`);
+        defaultLogger.info(`Submitted ${submitDict.id} and contributed for ${reward.toFixed(2)}`);
         failedRequestsInARow = 0;
         break;
     }
@@ -115,22 +107,22 @@ async function validateServer() {
         return lastStatus;
     }
     lastRetrieved = Date.now();
-    logger.debug("Retrieving settings from API Server...");
+    defaultLogger.debug("Retrieving settings from API Server...");
 
     try {
         const req = await axios.get(healthUrl);
         if (req.status === 200) {
             lastStatus = true;
         } else {
-            logger.error(`Health check failed with status ${req.status}`);
+            defaultLogger.error(`Health check failed with status ${req.status}`);
         }
     } catch (error) {
         if (error.response && error.response.status === 404) {
-            logger.error(`Server ${options.serverUrl} is up but the health check endpoint was not found.`);
+            defaultLogger.error(`Server ${options.serverUrl} is up but the health check endpoint was not found.`);
         } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-            logger.error(`Server ${options.serverUrl} is not reachable. Are you sure it's running?`);
+            defaultLogger.error(`Server ${options.serverUrl} is not reachable. Are you sure it's running?`);
         } else {
-            logger.error(error);
+            defaultLogger.error(error);
         }
         lastStatus = false;
     }
@@ -169,7 +161,7 @@ async function textGenerationJob() {
     let loopRetry = 0;    
     let popReq;
     while (loopRetry < MAX_POP_RETRIES) {
-        popReq = await safePost(`${cluster}/api/v2/generate/text/pop`, genDict, headers, 1000*parseInt(options.timeout), logger);
+        popReq = await safePost(`${cluster}/api/v2/generate/text/pop`, genDict, headers, 1000*parseInt(options.timeout));
 
         if (!popReq.ok) {
             await sleep(interval);
@@ -181,21 +173,21 @@ async function textGenerationJob() {
             currentId = popReq.data.id;
             currentPayload = popReq.data.payload;
         } catch (error) {
-            logger.error('textGenerationJob() PARSE ERROR', { 'error': error, 'data': popReq.data });
+            defaultLogger.error('textGenerationJob() PARSE ERROR', { 'error': error, 'data': popReq.data });
             await sleep(interval);
             loopRetry++;
             continue;
         }
 
         if (!currentId) {
-            logger.debug(`Server ${cluster} has no pending generations.`);
+            defaultLogger.debug(`Server ${cluster} has no pending generations.`);
             await sleep(interval);
             if (!running) { break; }
             continue;
         }
 
         if (currentPayload.width || currentPayload.length || currentPayload.steps) {
-            logger.error(`Stable Horde payload detected: ${currentPayload}. Aborting.`, currentPayload);
+            defaultLogger.error(`Stable Horde payload detected: ${currentPayload}. Aborting.`, currentPayload);
             currentId = null;
             currentPayload = null;
             continue;
@@ -204,7 +196,7 @@ async function textGenerationJob() {
         if (!currentPayload.max_length) { currentPayload.max_length = 80; }
         if (!currentPayload.max_context_length) { currentPayload.max_context_length = 1024; }
 
-        logger.info(`New job received from ${cluster} for ${currentPayload.max_length} tokens and ${currentPayload.max_context_length} max context.`);
+        defaultLogger.info(`New job received from ${cluster} for ${currentPayload.max_length} tokens and ${currentPayload.max_context_length} max context.`);
         break;
     }
 
@@ -214,28 +206,28 @@ async function textGenerationJob() {
     }
 
     // Convert the request
-    let server_request = server.generatePayload(currentPayload, options.serverUrl);
+    let server_request = await server.generatePayload(currentPayload, options.serverUrl);
     if (options.serverModel) { server_request.model = options.serverModel; }
     const generateUrl = `${options.serverUrl}${server.generateUrl}`;
 
     // Generate with retry
     loopRetry = 0;
     while (loopRetry < MAX_GENERATION_RETRIES) {
-        const req = await safePost(generateUrl, server_request, headers, 1000*parseInt(options.timeout), logger);
+        const req = await safePost(generateUrl, server_request, headers, 1000*parseInt(options.timeout));
         if (!req.ok) {
-            logger.error('Generation problem, will try again...')
+            defaultLogger.error('Generation problem, will try again...')
             await sleep(interval);
             loopRetry++;            
             continue;
         } else {
-            logger.debug(`Generation ${currentId} completed with ${loopRetry} retries.`)
+            defaultLogger.debug(`Generation ${currentId} completed with ${loopRetry} retries.`)
         }
 
         let generation;
         try {
             generation = server.extractGeneration(req.data, currentPayload.prompt);
         } catch (error) {
-            logger.error('Generation PARSE ERROR', { 'error': error, 'data': popReq.data });
+            defaultLogger.error('Generation PARSE ERROR', { 'error': error, 'data': popReq.data });
             await sleep(interval);
             loopRetry++;
             continue;
@@ -250,15 +242,15 @@ async function textGenerationJob() {
 
     // Handle generate failure
     if (currentId !== null) {
-        logger.error(`Generation ${currentId} failed after ${loopRetry} retries:`)
-        logger.error(JSON.stringify(currentPayload))
+        defaultLogger.error(`Generation ${currentId} failed after ${loopRetry} retries:`)
+        defaultLogger.error(JSON.stringify(currentPayload))
         const fail_dict = {
             "id": currentId,
             "state": "faulted",
             "generation": "faulted",
             "seed": -1,
         }
-        await safePost(`${cluster}/api/v2/generate/text/submit`, fail_dict, headers, 1000*parseInt(options.timeout), logger);
+        await safePost(`${cluster}/api/v2/generate/text/submit`, fail_dict, headers, 1000*parseInt(options.timeout));
         return false;
     }
 
@@ -267,15 +259,15 @@ async function textGenerationJob() {
 }
 
 process.on('SIGINT', async function() {
-    logger.error("Caught interrupt signal - shutting down");
+    defaultLogger.error("Caught interrupt signal - shutting down");
     running = false;
 });
 process.on('uncaughtException', function(err) { 
-    logger.error("Caught unexpected exception - shutting down", err);
+    defaultLogger.error("Caught unexpected exception - shutting down", err);
     running = false;
 }) 
 process.on('uncaughtRejection', function(err) { 
-    logger.error("Caught unexpected rejection - shutting down", err);
+    defaultLogger.error("Caught unexpected rejection - shutting down", err);
     running = false;
 }) 
 
@@ -287,39 +279,39 @@ async function runThread(t) {
         try {
             res = await textGenerationJob();
         } catch(error) {
-            logger.error(`Thread ${t} FAILED`, error);
+            defaultLogger.error(`Thread ${t} FAILED`, error);
             res = null;
         }
 
         let endTime = Date.now(); // Record the end time
         let runtime = endTime - startTime;
-        logger.info(`Thread ${t} iteration time ${runtime} ms result ${res}`);
+        defaultLogger.info(`Thread ${t} iteration time ${runtime} ms result ${res}`);
         startTime = endTime; // Update the start time for the next iteration
 
         if (res !== true) {
             failedRequestsInARow++;
             if (failedRequestsInARow >= MAX_FAILED_REQUESTS) {
-                logger.error('Failed too many requests in a row, aborting bridge...');
+                defaultLogger.error('Failed too many requests in a row, aborting bridge...');
                 running = false;
             }
         }
     }
-    logger.info(`Thread ${t} shutting down.`)
+    defaultLogger.info(`Thread ${t} shutting down.`)
 }
 
-logger.info('Checking server is up..')
+defaultLogger.info('Checking server is up..')
 let status = await validateServer();
 if (!status) {
-    logger.error('Something seems to be wrong with '+options.serverUrl);
+    defaultLogger.error('Something seems to be wrong with '+options.serverUrl);
     process.exit(1);
 }
 
 const THREADS = parseInt(options.threads);
-logger.info(`Spawning ${THREADS} worker threads.`)
+defaultLogger.info(`Spawning ${THREADS} worker threads.`)
 let threads = []
 for (let t=0; t<THREADS; t++) {
     threads.push(runThread(t));
 }
-logger.info('Press <Ctrl+C> to exit ...')
+defaultLogger.info('Press <Ctrl+C> to exit ...')
 await Promise.all(threads);
-logger.info('Worker threads have all exited.')
+defaultLogger.info('Worker threads have all exited.')

@@ -41,7 +41,12 @@ servers.tabbyapi = {
         if (prompt_tokens.ok && max_tokens > 0) {
             if (prompt_tokens.length > max_tokens) {
                 console.log('Trimming request from', prompt_tokens.length, ' to ', max_tokens)
-                // TODO: keep only the first max_tokens/2 and last max_tokens of prompt_tokens.tokens
+                // Keep the first half and last half of the tokens
+                const halfMaxTokens = Math.floor(max_tokens / 2);
+                const firstHalf = prompt_tokens.tokens.slice(0, halfMaxTokens);
+                const secondHalf = prompt_tokens.tokens.slice(-halfMaxTokens);
+                prompt_tokens.tokens = [...firstHalf, ...secondHalf];
+                console.log('Trimmed to', prompt_tokens.tokens.length, 'tokens');
             }
             currentPayload.prompt = prompt_tokens.tokens
         }
